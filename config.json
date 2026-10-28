@@ -1,0 +1,14 @@
+{
+  "exe_path": "Fairyland.exe",
+  "default_server": "SnowWhite (TH)",
+  "servers": [
+    {
+      "name": "SnowWhite (TH)",
+      "host": "fl.snowwhitefl.com",
+      "login_ports": [4721, 4722, 4723, 4724, 4725]
+    }
+  ],
+  "client_version": { "unk1": 1, "unk2": 0, "ver": 10 },
+  "connect_timeout": 20,
+  "reply_timeout": 20
+}
