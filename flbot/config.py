@@ -1,8 +1,13 @@
-"""Loads config.json (server hosts, Fairyland.exe path, client version, timeouts)."""
+"""Loads config.json (server hosts, Fairyland.exe path, client version, timeouts).
+
+If config.json has "proxy_config" (path to FAPProxy2.exe.config), its RemoteIP / ports / CustomServers /
+ClientVersion override the matching values in config.json.
+"""
 
 import json
 import os
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
 FROZEN = bool(getattr(sys, 'frozen', False))
@@ -56,6 +61,45 @@ def _resolve_exe(path):
     return path
 
 
+def load_proxy_settings(path):
+    """FAPProxy2.exe.config -> {setting name: text}."""
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError) as e:
+        raise ConfigError(f'Cannot read proxy config {path}: {e}')
+    out = {}
+    for s in root.iter('setting'):
+        v = s.find('value')
+        out[s.get('name')] = (v.text or '').strip() if v is not None else ''
+    return out
+
+
+def _apply_proxy_settings(pc, servers, version):
+    host = pc.get('RemoteIP')
+    if host:
+        try:
+            first, last = int(pc['RemoteFirstLoginPort']), int(pc['RemoteLastLoginPort'])
+        except (KeyError, ValueError) as e:
+            raise ConfigError(f'RemoteFirstLoginPort/RemoteLastLoginPort invalid in proxy config: {e!r}')
+        # FAPProxyPy picks randrange(first, last), so last is excluded
+        ports = list(range(first, max(last, first + 1)))
+        name = next((s.name for s in servers if s.host == host), host)
+        servers = [ServerEntry(name, host, ports)] + [s for s in servers if s.host != host]
+    for item in pc.get('CustomServers', '').split(';'):
+        name, _, hp = item.partition('=')
+        chost, _, cport = hp.rpartition(':')
+        if name.strip() and chost and cport.isdigit() and not any(s.name == name.strip() for s in servers):
+            servers.append(ServerEntry(name.strip(), chost.strip(), [int(cport)]))
+    cv = pc.get('ClientVersion')
+    if cv:
+        try:
+            unk1, unk2, ver = (int(x) for x in cv.split(','))
+        except ValueError as e:
+            raise ConfigError(f'ClientVersion must be "unk1,unk2,ver" in proxy config: {e!r}')
+        version = ClientVersion(unk1, unk2, ver)
+    return servers, version
+
+
 def load_config(path=CONFIG_PATH):
     try:
         with open(path, encoding='utf-8') as f:
@@ -74,14 +118,18 @@ def load_config(path=CONFIG_PATH):
             servers.append(ServerEntry(str(s['name']), str(s['host']), ports))
         except (KeyError, TypeError, ValueError) as e:
             raise ConfigError(f'servers[{i}] is invalid: {e!r}')
-    if not servers:
-        raise ConfigError('config.json must define at least one entry in "servers".')
 
     cv = raw.get('client_version') or {}
     try:
         version = ClientVersion(int(cv.get('unk1', 0)), int(cv.get('unk2', 0)), int(cv.get('ver', 0)))
     except (TypeError, ValueError) as e:
         raise ConfigError(f'client_version is invalid: {e!r}')
+
+    if raw.get('proxy_config'):
+        pc_path = os.path.normpath(os.path.join(APP_DIR, os.path.expanduser(raw['proxy_config'])))
+        servers, version = _apply_proxy_settings(load_proxy_settings(pc_path), servers, version)
+    if not servers:
+        raise ConfigError('No servers: add entries to "servers" or set RemoteIP in the proxy config.')
 
     default = raw.get('default_server') or servers[0].name
     if default not in [s.name for s in servers]:

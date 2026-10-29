@@ -1,5 +1,6 @@
 {
   "exe_path": "Fairyland.exe",
+  "proxy_config": "../FAPProxyPy/config/FAPProxy2.exe.config",
   "default_server": "SnowWhite (TH)",
   "servers": [
     {
