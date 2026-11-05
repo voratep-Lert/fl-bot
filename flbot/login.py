@@ -123,25 +123,37 @@ class LoginSession:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         
+        # Get the first channel packet
+        first = await self._wait_for(conn, OP_CHANNEL_LIST, timeout)
+        try:
+            channel = parse_channel(first)
+            channels.append(channel)
+            self._log(f'[login] channel {channel.id}: {channel.name} (pop: {channel.population})')
+        except Exception as e:
+            raise FLError(f'[login] failed to parse channel packet: {e}, raw: {first.hex(" ")}')
+        
+        # Collect additional channel packets (non-blocking)
         while True:
-            remaining = deadline - loop.time()
+            remaining = max(0.1, deadline - loop.time())
             if remaining <= 0:
                 break
             try:
-                raw = await conn.recv(remaining)
+                # Try to receive with a short timeout to see if more channels are coming
+                raw = await asyncio.wait_for(conn.recv(remaining), timeout=0.5)
                 op = opcode_of(raw)
                 if op == OP_CHANNEL_LIST:
                     try:
                         channel = parse_channel(raw)
                         channels.append(channel)
-                        self._log(f'[login] channel {channel.id}: {channel.name} ({channel.population})')
+                        self._log(f'[login] channel {channel.id}: {channel.name} (pop: {channel.population})')
                     except Exception as e:
                         self._log(f'[login] failed to parse channel packet: {e}')
                 else:
                     # Not a channel packet, we're done collecting
-                    # Put it back for the next _wait_for call
+                    # Put it back for the next _wait_for call by returning it
                     return channels, raw
             except asyncio.TimeoutError:
+                # No more packets coming, we're done
                 break
         
         if not channels:
@@ -180,7 +192,8 @@ class LoginSession:
         self._log('[login] credentials sent')
         
         # Collect all channel list packets
-        channels, _ = await self._collect_channels(conn, cfg.reply_timeout)
+        channels, _unused = await self._collect_channels(conn, cfg.reply_timeout)
+        self._log(f'[login] {len(channels)} channel(s) available')
         return channels
 
     async def select_channel(self, channel_id: int):
